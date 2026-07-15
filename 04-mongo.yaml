@@ -1,0 +1,129 @@
+# Mongo: PVC + Deployment + Service. A StatefulSet would be the more
+# "correct" primitive for a database in a real deployment (stable identity,
+# ordered rollout) - using a Deployment here per the assignment's explicit
+# "Deployment for each component" requirement. Single replica: a second
+# replica of a plain Deployment pointed at the same PVC would both try to
+# read/write the same data directory with no coordination, which is unsafe -
+# scaling Mongo for real means a StatefulSet + replica set, not this.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mongo-data
+  namespace: ai-task-platform
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongo
+  namespace: ai-task-platform
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # never run two pods against the same PVC, even briefly during a rollout
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      containers:
+        - name: mongo
+          image: mongo:7
+          # Pin WiredTiger's cache to a known, fixed size rather than
+          # letting it auto-scale off the container's memory limit. Without
+          # this, raising the memory limit (below) just gives WiredTiger
+          # more cache to claim, and the mongosh exec probe process (a
+          # separate, fairly heavy Node.js-based binary) ends up fighting it
+          # for the remaining headroom again - see the resources comment.
+          args: ["--wiredTigerCacheSizeGB=0.25"]
+          ports:
+            - containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              valueFrom: { secretKeyRef: { name: app-secret, key: MONGO_ROOT_USER } }
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom: { secretKeyRef: { name: app-secret, key: MONGO_ROOT_PASSWORD } }
+            - name: MONGO_APP_USER
+              valueFrom: { secretKeyRef: { name: app-secret, key: MONGO_APP_USER } }
+            - name: MONGO_APP_PASSWORD
+              valueFrom: { secretKeyRef: { name: app-secret, key: MONGO_APP_PASSWORD } }
+            - name: MONGO_INITDB_DATABASE
+              valueFrom: { configMapKeyRef: { name: app-config, key: MONGO_INITDB_DATABASE } }
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+            - name: init-script
+              mountPath: /docker-entrypoint-initdb.d/create-app-user.sh
+              subPath: create-app-user.sh
+              readOnly: true
+          # Learned the hard way: the mongosh exec probe process (a
+          # separate, fairly heavy Node.js-based binary - not a lightweight
+          # client) runs inside this same cgroup as mongod. At a 400Mi
+          # limit, `dmesg` on the node showed the kernel OOM-killer
+          # repeatedly killing the mongosh PROBE process specifically
+          # (confirmed via `minikube ssh -- dmesg`) during mongod's heavier
+          # startup/recovery phase, which corrupted mongod's own data files
+          # on the resulting restart (a cryptic "missing
+          # featureCompatibilityVersion document" fatal assertion, not an
+          # obvious OOMKilled status - see README.md's "Common pitfalls").
+          # Fixed by both pinning WiredTiger's cache (above) and giving
+          # real headroom here - the node has plenty of room for it.
+          resources:
+            requests:
+              cpu: 150m
+              memory: 400Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          # First boot on an empty volume (WiredTiger init + running
+          # 03-mongo-init-configmap.yaml's app-user creation script) is
+          # slow, especially under this tight a memory limit - a
+          # startupProbe holds off liveness/readiness entirely until first
+          # success, instead of the liveness probe killing a container
+          # that's genuinely still booting (which is what happened without
+          # this: 15s initialDelay + 3 retries wasn't enough headroom).
+          startupProbe:
+            exec:
+              command: ["sh", "-c", "mongosh --quiet -u \"$MONGO_INITDB_ROOT_USERNAME\" -p \"$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval \"db.adminCommand('ping')\""]
+            periodSeconds: 5
+            timeoutSeconds: 15
+            failureThreshold: 60 # up to 5 minutes for first boot
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "mongosh --quiet -u \"$MONGO_INITDB_ROOT_USERNAME\" -p \"$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval \"db.adminCommand('ping')\""]
+            periodSeconds: 15
+            timeoutSeconds: 15
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "mongosh --quiet -u \"$MONGO_INITDB_ROOT_USERNAME\" -p \"$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval \"db.adminCommand('ping')\""]
+            periodSeconds: 10
+            timeoutSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: mongo-data
+        - name: init-script
+          configMap:
+            name: mongo-init-script
+            defaultMode: 0o755
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongo
+  namespace: ai-task-platform
+spec:
+  selector:
+    app: mongo
+  ports:
+    - port: 27017
+      targetPort: 27017

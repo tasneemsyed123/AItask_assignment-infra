@@ -1,0 +1,33 @@
+# No `host` on the rule below - it matches ANY incoming Host header rather
+# than requiring one specific hostname. That's deliberate: the Cloudflare
+# Tunnel quick-tunnel URL (*.trycloudflare.com) is random and different on
+# every run, so hardcoding a host here would break the moment the tunnel
+# restarts. /api routes to the backend before / catches everything else -
+# ingress-nginx sorts by path specificity internally regardless of manifest
+# order, but the ordering here matches that for readability.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: app-ingress
+  namespace: ai-task-platform
+  annotations:
+    nginx.ingress.kubernetes.io/use-regex: "false"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: backend
+                port:
+                  number: 4000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: frontend
+                port:
+                  number: 3000

@@ -1,0 +1,111 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: ai-task-platform
+spec:
+  # queue_consumer.py is explicitly safe to run as N parallel replicas -
+  # BRPOP on a Redis list is atomic, so replicas never double-process the
+  # same task (see that file's docstring). Starts at 2 to demonstrate that;
+  # the HPA below takes over scaling from here.
+  replicas: 2
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: worker
+          image: ai-task-platform-worker:k8s
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef: { name: app-config }
+          env:
+            - name: MONGO_APP_USER
+              valueFrom: { secretKeyRef: { name: app-secret, key: MONGO_APP_USER } }
+            - name: MONGO_APP_PASSWORD
+              valueFrom: { secretKeyRef: { name: app-secret, key: MONGO_APP_PASSWORD } }
+            - name: MONGO_URI
+              value: "mongodb://$(MONGO_APP_USER):$(MONGO_APP_PASSWORD)@mongo:27017/ai_task_platform?authSource=ai_task_platform"
+            - name: REDIS_PASSWORD
+              valueFrom: { secretKeyRef: { name: app-secret, key: REDIS_PASSWORD } }
+            - name: REDIS_URL
+              value: "redis://:$(REDIS_PASSWORD)@redis:6379"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+          # No HTTP server (it's a Redis queue consumer) - both probes exec
+          # k8s_probe.py, which checks that the main loop's heartbeat file
+          # was touched recently. See queue_consumer.py/k8s_probe.py
+          # comments for why BRPOP has a timeout instead of blocking
+          # forever, and why liveness and readiness use the same check here
+          # (no meaningful "alive but not ready" state for this component).
+          livenessProbe:
+            exec:
+              command: ["python", "k8s_probe.py"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          readinessProbe:
+            exec:
+              command: ["python", "k8s_probe.py"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+---
+# Headless (no ClusterIP, no ports) - the worker doesn't serve traffic, so
+# there's nothing to load-balance across replicas. Still included per the
+# "Service for each component" requirement, and it's not purely a checkbox:
+# a headless Service gives each replica its own DNS record
+# (worker-<pod>.worker.ai-task-platform.svc.cluster.local), which is the
+# standard way to make a fleet of peer pods individually discoverable.
+apiVersion: v1
+kind: Service
+metadata:
+  name: worker
+  namespace: ai-task-platform
+spec:
+  clusterIP: None
+  selector:
+    app: worker
+---
+# Worker Scaling Support: CPU-based HPA. Requires the metrics-server addon
+# (see k8s/README.md). Worth noting honestly: this worker's actual
+# bottleneck is I/O (blocking on Redis BRPOP), not CPU - the fake string
+# operations it runs are near-instant - so CPU utilization is a rough proxy
+# here rather than a perfectly accurate scaling signal. A queue-depth-based
+# metric (e.g. via KEDA watching the Redis list length) would scale more
+# correctly in a real deployment; CPU-based HPA is what's implemented here
+# per the assignment's explicit requirement and is enough to demonstrate the
+# scaling mechanics (watch replica count respond to `kubectl top pods` load).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: worker-hpa
+  namespace: ai-task-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: worker
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60

@@ -1,0 +1,26 @@
+# Same script as mongo-init/create-app-user.sh at the project root (used by
+# docker-compose.yml) - kept in sync manually since ConfigMaps can't
+# reference a file outside the manifest. Mounted into
+# /docker-entrypoint-initdb.d/ on the Mongo pod, where the official mongo
+# image runs it once, automatically, the first time it initializes an empty
+# data volume - creates the least-privilege app user (readWrite on just this
+# app's database) separately from the root/admin account, so the backend/
+# worker never need root credentials.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongo-init-script
+  namespace: ai-task-platform
+data:
+  create-app-user.sh: |
+    #!/bin/bash
+    set -e
+
+    mongosh <<EOF
+    use ${MONGO_INITDB_DATABASE}
+    db.createUser({
+      user: "${MONGO_APP_USER}",
+      pwd: "${MONGO_APP_PASSWORD}",
+      roles: [{ role: "readWrite", db: "${MONGO_INITDB_DATABASE}" }]
+    })
+    EOF

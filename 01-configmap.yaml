@@ -1,0 +1,26 @@
+# Non-secret configuration shared across services. Anything credential-shaped
+# (passwords, JWT_SECRET, the composite MONGO_URI/REDIS_URL connection
+# strings) lives in 02-secret.yaml instead - see that file's comments for why.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: app-config
+  namespace: ai-task-platform
+data:
+  NODE_ENV: "production"
+  PORT: "4000"
+  JWT_EXPIRES_IN: "15m"
+  STALE_TASK_TIMEOUT_MINUTES: "5"
+  # Same-origin note: the frontend calls the backend via a RELATIVE path
+  # (NEXT_PUBLIC_API_BASE_URL=/api/v1, baked in at frontend image build time -
+  # see frontend-deployment.yaml comments), routed to the backend Service by
+  # the Ingress's /api path rule. Because of that, real browser traffic
+  # through the Ingress/tunnel is always same-origin and never actually
+  # triggers a CORS check - these two values only exist to satisfy the
+  # backend's own "refuse to boot with CORS_ORIGIN=* in production" guard
+  # (config/env.ts) and for direct cross-origin API testing with curl/Postman.
+  CORS_ORIGIN: "http://ai-task-platform.local"
+  FRONTEND_URL: "http://ai-task-platform.local"
+  TASK_QUEUE_KEY: "task_queue"
+  LOG_LEVEL: "INFO"
+  MONGO_INITDB_DATABASE: "ai_task_platform"
