@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
         - name: backend
-          image: ai-task-platform-backend:k8s
-          imagePullPolicy: Never # image is loaded directly into the cluster, not pulled from a registry - see k8s/README.md
+          image: tasneemsyed/ai-task-platform-backend:latest
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 4000
           envFrom:
