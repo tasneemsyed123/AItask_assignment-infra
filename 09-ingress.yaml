@@ -1,10 +1,11 @@
-# No `host` on the rule below - it matches ANY incoming Host header rather
-# than requiring one specific hostname. That's deliberate: the Cloudflare
-# Tunnel quick-tunnel URL (*.trycloudflare.com) is random and different on
-# every run, so hardcoding a host here would break the moment the tunnel
-# restarts. /api routes to the backend before / catches everything else -
-# ingress-nginx sorts by path specificity internally regardless of manifest
-# order, but the ordering here matches that for readability.
+# Now bound to a real, stable domain (DuckDNS-backed, points at the GCP
+# VM's static-enough external IP) instead of matching any Host header - that
+# looser setup was for the earlier Cloudflare quick-tunnel days, when the
+# hostname was random and changed every restart. cert-manager's
+# ingress-shim watches for the tls block below and the cluster-issuer
+# annotation, and automatically requests/renews a real Let's Encrypt cert
+# via HTTP-01 (which needs port 80 reachable at this exact host - already
+# true, see the firewall rule in README.md).
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -12,10 +13,16 @@ metadata:
   namespace: ai-task-platform
   annotations:
     nginx.ingress.kubernetes.io/use-regex: "false"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
   ingressClassName: nginx
+  tls:
+    - hosts:
+        - mernstackwebapptasneem.duckdns.org
+      secretName: app-tls
   rules:
-    - http:
+    - host: mernstackwebapptasneem.duckdns.org
+      http:
         paths:
           - path: /api
             pathType: Prefix

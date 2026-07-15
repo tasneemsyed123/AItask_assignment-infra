@@ -15,12 +15,14 @@ data:
   # (NEXT_PUBLIC_API_BASE_URL=/api/v1, baked in at frontend image build time -
   # see frontend-deployment.yaml comments), routed to the backend Service by
   # the Ingress's /api path rule. Because of that, real browser traffic
-  # through the Ingress/tunnel is always same-origin and never actually
-  # triggers a CORS check - these two values only exist to satisfy the
-  # backend's own "refuse to boot with CORS_ORIGIN=* in production" guard
-  # (config/env.ts) and for direct cross-origin API testing with curl/Postman.
-  CORS_ORIGIN: "http://ai-task-platform.local"
-  FRONTEND_URL: "http://ai-task-platform.local"
+  # through the Ingress is always same-origin and never actually triggers a
+  # CORS check - CORS_ORIGIN only exists to satisfy the backend's own
+  # "refuse to boot with CORS_ORIGIN=* in production" guard (config/env.ts)
+  # and for direct cross-origin API testing with curl/Postman. FRONTEND_URL
+  # is genuinely used though - it's what password-reset emails link to
+  # (auth.service.ts), so it has to be the real, reachable domain.
+  CORS_ORIGIN: "https://mernstackwebapptasneem.duckdns.org"
+  FRONTEND_URL: "https://mernstackwebapptasneem.duckdns.org"
   TASK_QUEUE_KEY: "task_queue"
   LOG_LEVEL: "INFO"
   MONGO_INITDB_DATABASE: "ai_task_platform"
