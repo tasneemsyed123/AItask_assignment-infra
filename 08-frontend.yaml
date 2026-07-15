@@ -25,7 +25,7 @@ spec:
           # the minikube IP, a port-forward, or the ephemeral
           # *.trycloudflare.com tunnel URL (which changes every run). See
           # k8s/README.md for the exact build command.
-          image: tasneemsyed/ai-task-platform-frontend:d095084
+          image: tasneemsyed/ai-task-platform-frontend:e9ecf42
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 3000
